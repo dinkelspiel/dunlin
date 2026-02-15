@@ -15,7 +15,8 @@ WORKDIR /app
 COPY frontend ./frontend
 WORKDIR /app/frontend
 ENV VITE_API_URL=${VITE_API_URL}
-RUN echo Y | pnpm install && pnpm build
+ENV CI=true
+RUN pnpm install && pnpm build
 
 WORKDIR /app
 
