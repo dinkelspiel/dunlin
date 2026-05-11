@@ -18,7 +18,7 @@ func getCacheDirectory() string {
 	return cacheDirectory
 }
 
-func CacheImage(teamProject models.TeamProject, db *db.DB, image io.Reader, directory string, file string, width int, height int) error {
+func CacheImage(teamProject models.TeamProject, db *db.DB, image io.Reader, directory string, file string, width int, height int, rotationDegrees int) error {
 	cacheDirectory := getCacheDirectory()
 	cacheFile := uuid.NewString() + filepath.Ext(file)
 	cacheFilePath := filepath.Join(cacheDirectory, cacheFile)
@@ -39,14 +39,15 @@ func CacheImage(teamProject models.TeamProject, db *db.DB, image io.Reader, dire
 	}
 
 	cachedImage := models.CachedImage{
-		Width:         width,
-		Height:        height,
-		CacheFile:     cacheFile,
-		Directory:     directory,
-		File:          file,
-		SizeBytes:     size,
-		TeamProjectId: *teamProject.Id,
-		TeamProject:   &teamProject,
+		Width:           width,
+		Height:          height,
+		CacheFile:       cacheFile,
+		Directory:       directory,
+		File:            file,
+		RotationDegrees: rotationDegrees,
+		SizeBytes:       size,
+		TeamProjectId:   *teamProject.Id,
+		TeamProject:     &teamProject,
 	}
 
 	_, err = dao.CreateCachedImage(db, cachedImage)
@@ -56,8 +57,8 @@ func CacheImage(teamProject models.TeamProject, db *db.DB, image io.Reader, dire
 	return nil
 }
 
-func RetrieveCachedImagePath(db *db.DB, directory string, file string, width int, height int) (*string, error) {
-	cachedImage, err := dao.GetCachedImageByOriginalAndWidthAndHeight(db, directory, file, width, height)
+func RetrieveCachedImagePath(db *db.DB, directory string, file string, width int, height int, rotationDegrees int) (*string, error) {
+	cachedImage, err := dao.GetCachedImageByOriginalAndWidthAndHeightAndRotation(db, directory, file, width, height, rotationDegrees)
 	if err != nil {
 		return nil, err
 	}

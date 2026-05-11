@@ -12,7 +12,7 @@ CREATE TABLE
 INSERT INTO
     `migrations` (`name`)
 SELECT
-    "0002_rotations"
+    "0002_rot"
 WHERE
     NOT EXISTS (
         SELECT
@@ -20,5 +20,5 @@ WHERE
         FROM
             `migrations`
         WHERE
-            `name` = "0002_rotations"
+            `name` = "0002_rot"
     );

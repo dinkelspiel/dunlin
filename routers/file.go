@@ -52,23 +52,14 @@ func FileRouter(r *gin.RouterGroup, db *db.DB) {
 
 		mimeType := mime.TypeByExtension(filepath.Ext(path))
 		if strings.HasPrefix(mimeType, "image/") {
-			srcImage, err := imaging.Open(path)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to open image"})
-				return
-			}
 			rotationDegrees, err := services.GetTeamProjectImageRotation(db, *teamProject, filePath)
 			if err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 				return
 			}
-			srcImage = rotateImage(srcImage, rotationDegrees)
 
-			oldWidth := srcImage.Bounds().Dx()
-			width := srcImage.Bounds().Dx()
-			oldHeight := srcImage.Bounds().Dy()
-			height := srcImage.Bounds().Dy()
-
+			width := 0
+			height := 0
 			widthStr := c.Query("w")
 			heightStr := c.Query("h")
 			if w, err := strconv.Atoi(widthStr); err == nil {
@@ -79,23 +70,32 @@ func FileRouter(r *gin.RouterGroup, db *db.DB) {
 			}
 
 			// Return early if no transformation has to be made
-			if rotationDegrees == 0 && oldWidth == width && oldHeight == height {
+			if rotationDegrees == 0 && width == 0 && height == 0 {
 				c.Header("Content-Description", "File Transfer")
 				c.File(path)
 				return
 			}
 
-			if rotationDegrees == 0 {
-				cacheFilePath, _ := services.RetrieveCachedImagePath(db, filepath.Dir(path), filePath, width, height)
-				if cacheFilePath != nil {
-					c.Header("Content-Description", "File Transfer")
-					c.File(*cacheFilePath)
-					fmt.Printf("Retrieved cache %s", *cacheFilePath)
-					return
-				}
+			cacheDirectory := filepath.Dir(path)
+			cacheFilePath, _ := services.RetrieveCachedImagePath(db, cacheDirectory, filePath, width, height, rotationDegrees)
+			if cacheFilePath != nil {
+				c.Header("Content-Description", "File Transfer")
+				c.File(*cacheFilePath)
+				fmt.Printf("Retrieved cache %s", *cacheFilePath)
+				return
 			}
 
-			dstImage := imaging.Resize(srcImage, width, height, imaging.Lanczos)
+			srcImage, err := imaging.Open(path)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to open image"})
+				return
+			}
+
+			srcImage = rotateImage(srcImage, rotationDegrees)
+			dstImage := srcImage
+			if width != 0 || height != 0 {
+				dstImage = imaging.Resize(srcImage, width, height, imaging.Lanczos)
+			}
 
 			var buf bytes.Buffer
 			format := imaging.PNG
@@ -126,14 +126,12 @@ func FileRouter(r *gin.RouterGroup, db *db.DB) {
 				return
 			}
 
-			if rotationDegrees == 0 {
-				go func(data []byte) {
-					err := services.CacheImage(*teamProject, db, bytes.NewReader(data), filepath.Dir(path), filePath, width, height)
-					if err != nil {
-						log.Printf("Failed to cache image: %v", err)
-					}
-				}(imageBytes)
-			}
+			go func(data []byte) {
+				err := services.CacheImage(*teamProject, db, bytes.NewReader(data), cacheDirectory, filePath, width, height, rotationDegrees)
+				if err != nil {
+					log.Printf("Failed to cache image: %v", err)
+				}
+			}(imageBytes)
 
 			return
 		}

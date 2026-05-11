@@ -166,8 +166,14 @@ const setAlbumMode = (enabled: boolean) => {
 }
 
 const encodeFilePath = (path: string) => path.split('/').map(encodeURIComponent).join('/')
-const getImageUrl = (image: AlbumImage) =>
-  `${apiUrl}/files/${teamSlug.value}/${projectSlug.value}/${encodeFilePath(image.path)}?rotation=${image.rotationDegrees}`
+const getImageUrl = (image: AlbumImage, width?: number) => {
+  const params = new URLSearchParams({ rotation: String(image.rotationDegrees) })
+  if (width) {
+    params.set('w', String(width))
+  }
+
+  return `${apiUrl}/files/${teamSlug.value}/${projectSlug.value}/${encodeFilePath(image.path)}?${params}`
+}
 
 const { data: files } = useQuery<FilesResponse>({
   queryKey: ['files', teamSlug, projectSlug, filepathWithSlashes],
@@ -449,7 +455,7 @@ watch([team, teamProject], () => {
             @click="openAlbumImage(index)"
           >
             <img
-              :src="getImageUrl(image)"
+              :src="getImageUrl(image, 480)"
               :alt="image.path"
               class="w-full object-cover"
               loading="lazy"

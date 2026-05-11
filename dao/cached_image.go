@@ -13,7 +13,7 @@ func scanCachedImageRow(rows *sql.Rows, db *db.DB) (*models.CachedImage, error) 
 	var createdAt string
 	var updatedAt sql.NullString
 
-	if err := rows.Scan(&cachedImage.Id, &cachedImage.Width, &cachedImage.Height, &cachedImage.CacheFile, &cachedImage.Directory, &cachedImage.File, &cachedImage.SizeBytes, &cachedImage.TeamProjectId, &createdAt, &updatedAt); err != nil {
+	if err := rows.Scan(&cachedImage.Id, &cachedImage.Width, &cachedImage.Height, &cachedImage.CacheFile, &cachedImage.Directory, &cachedImage.File, &cachedImage.RotationDegrees, &cachedImage.SizeBytes, &cachedImage.TeamProjectId, &createdAt, &updatedAt); err != nil {
 		return nil, err
 	}
 
@@ -41,8 +41,8 @@ func scanCachedImageRow(rows *sql.Rows, db *db.DB) (*models.CachedImage, error) 
 	return &cachedImage, nil
 }
 
-func GetCachedImageByOriginalAndWidthAndHeight(db *db.DB, directory string, file string, width int, height int) (*models.CachedImage, error) {
-	rows, err := db.MariaDB.Query("SELECT id, width, height, cache_file, directory, file, size_bytes, team_project_id, created_at, updated_at FROM cached_images WHERE directory = ? AND file = ? AND width = ? AND height = ?", directory, file, width, height)
+func GetCachedImageByOriginalAndWidthAndHeightAndRotation(db *db.DB, directory string, file string, width int, height int, rotationDegrees int) (*models.CachedImage, error) {
+	rows, err := db.MariaDB.Query("SELECT id, width, height, cache_file, directory, file, rotation_degrees, size_bytes, team_project_id, created_at, updated_at FROM cached_images WHERE directory = ? AND file = ? AND width = ? AND height = ? AND rotation_degrees = ? ORDER BY created_at DESC LIMIT 1", directory, file, width, height, rotationDegrees)
 	if err != nil {
 		return nil, err
 	}
@@ -55,9 +55,9 @@ func GetCachedImageByOriginalAndWidthAndHeight(db *db.DB, directory string, file
 }
 
 func CreateCachedImage(db *db.DB, cachedImage models.CachedImage) (*models.CachedImage, error) {
-	insertCachedImage := "INSERT INTO cached_images(width, height, cache_file, directory, file, size_bytes, team_project_id) VALUES(?, ?, ?, ?, ?, ?, ?)"
+	insertCachedImage := "INSERT INTO cached_images(width, height, cache_file, directory, file, rotation_degrees, size_bytes, team_project_id) VALUES(?, ?, ?, ?, ?, ?, ?, ?)"
 
-	res, err := db.MariaDB.Exec(insertCachedImage, cachedImage.Width, cachedImage.Height, cachedImage.CacheFile, cachedImage.Directory, cachedImage.File, cachedImage.SizeBytes, cachedImage.TeamProject.Id)
+	res, err := db.MariaDB.Exec(insertCachedImage, cachedImage.Width, cachedImage.Height, cachedImage.CacheFile, cachedImage.Directory, cachedImage.File, cachedImage.RotationDegrees, cachedImage.SizeBytes, cachedImage.TeamProject.Id)
 	if err != nil {
 		return nil, err
 	}
