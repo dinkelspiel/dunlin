@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/dinkelspiel/cdn/dao"
 	"github.com/dinkelspiel/cdn/db"
@@ -14,32 +16,177 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func GetTeamProjectFiles(teamProject models.TeamProject, relativePath string) ([]storage.FSItem, error) {
+func getTeamProjectBasePath(teamProject models.TeamProject) string {
 	config, _ := LoadConfig()
-	baseDir := fmt.Sprintf("%s/public/%d/%d", config.StorageUrl, *teamProject.Team.Id, *teamProject.Id)
+	return filepath.Clean(fmt.Sprintf("%s/public/%d/%d", config.StorageUrl, *teamProject.Team.Id, *teamProject.Id))
+}
 
-	fullPath := filepath.Join(baseDir, relativePath)
-	fullPath = filepath.Clean(fullPath)
+func resolveTeamProjectPath(teamProject models.TeamProject, relativePath string) (string, error) {
+	baseDir := getTeamProjectBasePath(teamProject)
+	fullPath := filepath.Clean(filepath.Join(baseDir, relativePath))
 
-	if !strings.HasPrefix(fullPath, baseDir) {
-		return nil, fmt.Errorf("access to path '%s' is denied", fullPath)
+	relativeToBase, err := filepath.Rel(baseDir, fullPath)
+	if err != nil {
+		return "", err
+	}
+
+	if relativeToBase == ".." || strings.HasPrefix(relativeToBase, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("access to path '%s' is denied", fullPath)
+	}
+
+	return fullPath, nil
+}
+
+func GetTeamProjectFiles(teamProject models.TeamProject, relativePath string) ([]storage.FSItem, error) {
+	fullPath, err := resolveTeamProjectPath(teamProject, relativePath)
+	if err != nil {
+		return nil, err
 	}
 
 	return storage.ListFiles(fullPath)
 }
 
-func GetFilePathToFileInTeamProject(teamProject models.TeamProject, relativePath string) (string, error) {
-	config, _ := LoadConfig()
-	baseDir := fmt.Sprintf("%s/public/%d/%d", config.StorageUrl, *teamProject.Team.Id, *teamProject.Id)
+type TeamProjectImage struct {
+	Path            string
+	Name            string
+	Size            int64
+	RotationDegrees int
+	LastModified    time.Time
+}
 
-	fullPath := filepath.Join(baseDir, relativePath)
-	fullPath = filepath.Clean(fullPath)
-
-	if !strings.HasPrefix(fullPath, baseDir) {
-		return "", fmt.Errorf("access to path '%s' is denied", fullPath)
+func normalizeTeamProjectImagePath(teamProject models.TeamProject, relativePath string) (string, error) {
+	basePath := getTeamProjectBasePath(teamProject)
+	fullPath, err := resolveTeamProjectPath(teamProject, relativePath)
+	if err != nil {
+		return "", err
 	}
 
-	return fullPath, nil
+	filePath, err := filepath.Rel(basePath, fullPath)
+	if err != nil {
+		return "", err
+	}
+
+	return filepath.ToSlash(filePath), nil
+}
+
+func normalizeRotationDegrees(rotationDegrees int) int {
+	rotationDegrees = rotationDegrees % 360
+	if rotationDegrees < 0 {
+		rotationDegrees += 360
+	}
+	return rotationDegrees
+}
+
+func GetTeamProjectImageRotation(db *db.DB, teamProject models.TeamProject, relativePath string) (int, error) {
+	filePath, err := normalizeTeamProjectImagePath(teamProject, relativePath)
+	if err != nil {
+		return 0, err
+	}
+
+	imageRotation, err := dao.GetImageRotationByProjectAndPath(db, *teamProject.Id, filePath)
+	if err != nil || imageRotation == nil {
+		return 0, err
+	}
+
+	return normalizeRotationDegrees(imageRotation.RotationDegrees), nil
+}
+
+func RotateTeamProjectImageClockwise(db *db.DB, teamProject models.TeamProject, relativePath string) (*models.ImageRotation, error) {
+	filePath, err := normalizeTeamProjectImagePath(teamProject, relativePath)
+	if err != nil {
+		return nil, err
+	}
+	if !isAlbumImage(filePath) {
+		return nil, fmt.Errorf("'%s' is not a supported album image", filePath)
+	}
+
+	fullPath, err := resolveTeamProjectPath(teamProject, relativePath)
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		return nil, err
+	}
+	if info.IsDir() {
+		return nil, fmt.Errorf("'%s' is a directory", filePath)
+	}
+
+	return dao.IncrementImageRotationClockwise(db, *teamProject.Id, filePath)
+}
+
+func GetTeamProjectImages(db *db.DB, teamProject models.TeamProject) ([]TeamProjectImage, error) {
+	basePath, err := resolveTeamProjectPath(teamProject, "/")
+	if err != nil {
+		return nil, err
+	}
+	rotations, err := dao.GetImageRotationsByProject(db, *teamProject.Id)
+	if err != nil {
+		return nil, err
+	}
+
+	images := []TeamProjectImage{}
+	err = filepath.WalkDir(basePath, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if entry.IsDir() || !isAlbumImage(entry.Name()) {
+			return nil
+		}
+
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+
+		relativePath, err := filepath.Rel(basePath, path)
+		if err != nil {
+			return err
+		}
+
+		images = append(images, TeamProjectImage{
+			Path:            filepath.ToSlash(relativePath),
+			Name:            entry.Name(),
+			Size:            info.Size(),
+			RotationDegrees: normalizeRotationDegrees(rotations[filepath.ToSlash(relativePath)]),
+			LastModified:    info.ModTime(),
+		})
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	sort.Slice(images, func(i, j int) bool {
+		return strings.ToLower(images[i].Path) < strings.ToLower(images[j].Path)
+	})
+
+	return images, nil
+}
+
+func isAlbumImage(name string) bool {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".png", ".jpg", ".jpeg":
+		return true
+	default:
+		return false
+	}
+}
+
+func SerializeTeamProjectImage(image TeamProjectImage) gin.H {
+	return gin.H{
+		"path":            image.Path,
+		"name":            image.Name,
+		"size":            image.Size,
+		"rotationDegrees": image.RotationDegrees,
+		"lastModified":    image.LastModified.Format(time.RFC3339),
+	}
+}
+
+func GetFilePathToFileInTeamProject(teamProject models.TeamProject, relativePath string) (string, error) {
+	return resolveTeamProjectPath(teamProject, relativePath)
 }
 
 func GetTeamProjectFile(teamProject models.TeamProject, relativePath string) ([]byte, error) {
@@ -70,7 +217,7 @@ func EnsureFoldersExists() error {
 func CreateTeamFolder(team models.Team) error {
 	config, _ := LoadConfig()
 
-	teamDir := fmt.Sprintf("%s/public/%d", config.StorageUrl, *team.Id)
+	teamDir := filepath.Clean(fmt.Sprintf("%s/public/%d", config.StorageUrl, *team.Id))
 	return os.MkdirAll(teamDir, os.ModePerm)
 }
 

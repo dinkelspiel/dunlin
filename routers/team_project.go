@@ -15,6 +15,10 @@ type CreateFolderBody struct {
 	Path string `json:"path" binding:"required"`
 }
 
+type RotateAlbumImageBody struct {
+	Path string `json:"path" binding:"required"`
+}
+
 func TeamProjectRouter(v1 *gin.RouterGroup, db *db.DB) {
 	team := v1.Group("/teams/:teamSlug/projects/:projectSlug")
 	team.GET("", func(c *gin.Context) {
@@ -60,6 +64,62 @@ func TeamProjectRouter(v1 *gin.RouterGroup, db *db.DB) {
 		c.JSON(http.StatusOK, gin.H{
 			"message": "Found files",
 			"files":   fileList,
+		})
+	})
+
+	team.GET("/album", func(c *gin.Context) {
+		teamSlug := c.Param("teamSlug")
+		teamProjectSlug := c.Param("projectSlug")
+
+		_, teamProject, err := services.GetTeamAndProjectBySlug(db, teamSlug, teamProjectSlug)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		images, err := services.GetTeamProjectImages(db, *teamProject)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		imageList := []gin.H{}
+		for _, image := range images {
+			imageList = append(imageList, services.SerializeTeamProjectImage(image))
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"message": "Found album images",
+			"images":  imageList,
+		})
+	})
+
+	team.POST("/album/rotate", middleware.AuthMiddleware(db), func(c *gin.Context) {
+		var body RotateAlbumImageBody
+		if err := c.BindJSON(&body); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		teamSlug := c.Param("teamSlug")
+		teamProjectSlug := c.Param("projectSlug")
+
+		_, teamProject, err := services.GetTeamAndProjectBySlug(db, teamSlug, teamProjectSlug)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		imageRotation, err := services.RotateTeamProjectImageClockwise(db, *teamProject, body.Path)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"message":         "Rotated album image",
+			"path":            imageRotation.FilePath,
+			"rotationDegrees": imageRotation.RotationDegrees,
 		})
 	})
 

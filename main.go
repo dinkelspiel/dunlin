@@ -32,9 +32,33 @@ type PostStatisticBody struct {
 	JavaVersion       string `json:"javaVersion"`
 }
 
+func openMariaDBWithRetry(dsn string, attempts int, delay time.Duration) (*sql.DB, error) {
+	var lastErr error
+
+	for attempt := 1; attempt <= attempts; attempt++ {
+		mariaDBClient, err := sql.Open("mysql", dsn)
+		if err != nil {
+			lastErr = err
+		} else {
+			pingErr := mariaDBClient.Ping()
+			if pingErr == nil {
+				return mariaDBClient, nil
+			}
+
+			lastErr = pingErr
+			mariaDBClient.Close()
+		}
+
+		if attempt < attempts {
+			log.Printf("Waiting for mariadb (%d/%d): %v", attempt, attempts, lastErr)
+			time.Sleep(delay)
+		}
+	}
+
+	return nil, lastErr
+}
+
 func setupRouter(db *db.DB) *gin.Engine {
-	// Disable Console Color
-	// gin.DisableConsoleColor()
 	r := gin.New()
 	r.Use(gin.Logger())
 	r.Use(gin.Recovery())
@@ -49,7 +73,6 @@ func setupRouter(db *db.DB) *gin.Engine {
 		MaxAge:           12 * time.Hour,
 	}))
 
-	// Ping test
 	r.GET("/ping", func(c *gin.Context) {
 		c.String(http.StatusOK, "pong")
 	})
@@ -57,7 +80,6 @@ func setupRouter(db *db.DB) *gin.Engine {
 	api := r.Group("/api")
 	v1 := api.Group("/v1")
 
-	// This route serves all the files
 	routers.FileRouter(r.Group("/"), db)
 
 	routers.AuthRouter(v1, db)
@@ -92,47 +114,33 @@ func main() {
 	}
 	fmt.Println("Running as:", u.Username)
 
-	// Load Config
 	config, err := services.LoadConfig()
 	if err != nil {
 		log.Fatal("Error loading config: ", err)
 		return
 	}
 
-	services.EnsureFoldersExists()
+	if err := services.EnsureFoldersExists(); err != nil {
+		log.Fatal("Error ensuring folders exist: ", err)
+		return
+	}
 
-	// Load MariaDB Database
-	dsn := config.MariaDBDatabaseUrl
-	mariaDBClient, err := sql.Open("mysql", dsn)
+	mariaDBClient, err := openMariaDBWithRetry(config.MariaDBDatabaseUrl, 15, time.Second)
 	if err != nil {
-		log.Fatal("Error opening mariadb: ", err)
+		log.Fatal("Error connecting to mariadb: ", err)
 		return
 	}
 	defer mariaDBClient.Close()
-	if err = mariaDBClient.Ping(); err != nil {
-		log.Fatal("Error pinging mariadb: ", err)
+
+	if err := services.ApplyMigrations(mariaDBClient); err != nil {
+		log.Fatal("Error applying migrations: ", err)
 		return
 	}
 
-	// Load Redis Database
-	// redisClient := redis.NewClient(&redis.Options{
-	// 	Addr: config.RedisDatabaseUrl,
-	// })
-	// defer redisClient.Close()
-
-	// ctx := context.Background()
-	// if err = redisClient.Ping(ctx).Err(); err != nil {
-	// 	log.Fatal("Error pinging redis: ", err)
-	// 	return
-	// }
-
-	db := db.DB{
+	database := db.DB{
 		MariaDB: mariaDBClient,
-		// Redis:   redisClient,
 	}
 
-	r := setupRouter(&db)
-
-	// Listen and Server in 0.0.0.0:8080
+	r := setupRouter(&database)
 	r.Run(":8080")
 }

@@ -3,6 +3,7 @@ package routers
 import (
 	"bytes"
 	"fmt"
+	"image"
 	"io"
 	"log"
 	"mime"
@@ -16,6 +17,19 @@ import (
 	"github.com/disintegration/imaging"
 	"github.com/gin-gonic/gin"
 )
+
+func rotateImage(srcImage image.Image, rotationDegrees int) image.Image {
+	switch rotationDegrees {
+	case 90:
+		return imaging.Rotate270(srcImage)
+	case 180:
+		return imaging.Rotate180(srcImage)
+	case 270:
+		return imaging.Rotate90(srcImage)
+	default:
+		return srcImage
+	}
+}
 
 func FileRouter(r *gin.RouterGroup, db *db.DB) {
 	r.GET("/files/:teamSlug/:projectSlug/*filepath", func(c *gin.Context) {
@@ -43,6 +57,12 @@ func FileRouter(r *gin.RouterGroup, db *db.DB) {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to open image"})
 				return
 			}
+			rotationDegrees, err := services.GetTeamProjectImageRotation(db, *teamProject, filePath)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+			srcImage = rotateImage(srcImage, rotationDegrees)
 
 			oldWidth := srcImage.Bounds().Dx()
 			width := srcImage.Bounds().Dx()
@@ -59,18 +79,20 @@ func FileRouter(r *gin.RouterGroup, db *db.DB) {
 			}
 
 			// Return early if no transformation has to be made
-			if oldWidth == width && oldHeight == height {
+			if rotationDegrees == 0 && oldWidth == width && oldHeight == height {
 				c.Header("Content-Description", "File Transfer")
 				c.File(path)
 				return
 			}
 
-			cacheFilePath, _ := services.RetrieveCachedImagePath(db, filepath.Dir(path), filePath, width, height)
-			if cacheFilePath != nil {
-				c.Header("Content-Description", "File Transfer")
-				c.File(*cacheFilePath)
-				fmt.Printf("Retrieved cache %s", *cacheFilePath)
-				return
+			if rotationDegrees == 0 {
+				cacheFilePath, _ := services.RetrieveCachedImagePath(db, filepath.Dir(path), filePath, width, height)
+				if cacheFilePath != nil {
+					c.Header("Content-Description", "File Transfer")
+					c.File(*cacheFilePath)
+					fmt.Printf("Retrieved cache %s", *cacheFilePath)
+					return
+				}
 			}
 
 			dstImage := imaging.Resize(srcImage, width, height, imaging.Lanczos)
@@ -104,12 +126,14 @@ func FileRouter(r *gin.RouterGroup, db *db.DB) {
 				return
 			}
 
-			go func(data []byte) {
-				err := services.CacheImage(*teamProject, db, bytes.NewReader(data), filepath.Dir(path), filePath, width, height)
-				if err != nil {
-					log.Printf("Failed to cache image: %v", err)
-				}
-			}(imageBytes)
+			if rotationDegrees == 0 {
+				go func(data []byte) {
+					err := services.CacheImage(*teamProject, db, bytes.NewReader(data), filepath.Dir(path), filePath, width, height)
+					if err != nil {
+						log.Printf("Failed to cache image: %v", err)
+					}
+				}(imageBytes)
+			}
 
 			return
 		}
