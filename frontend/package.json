@@ -49,5 +49,13 @@
     "vite": "^7.0.0",
     "vite-plugin-vue-devtools": "^7.7.7",
     "vue-tsc": "^2.2.10"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@tailwindcss/oxide",
+      "esbuild",
+      "maplibre-gl",
+      "vue-demi"
+    ]
   }
 }
