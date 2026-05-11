@@ -8,7 +8,7 @@ RUN apk add --no-cache \
     nodejs \
     npm
 
-RUN npm install -g pnpm
+RUN npm install -g pnpm@10.13.1
 
 WORKDIR /app
 
@@ -16,7 +16,7 @@ COPY frontend ./frontend
 WORKDIR /app/frontend
 ENV VITE_API_URL=${VITE_API_URL}
 ENV CI=true
-RUN pnpm install && pnpm build
+RUN pnpm install --frozen-lockfile && pnpm build
 
 WORKDIR /app
 
